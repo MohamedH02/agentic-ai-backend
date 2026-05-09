@@ -1,3 +1,5 @@
+import json
+import httpx
 from typing import Annotated
 from typing_extensions import TypedDict
 from langchain_core.messages import SystemMessage, AIMessage, HumanMessage
@@ -11,6 +13,8 @@ from langgraph.prebuilt import ToolNode
 class AgentState(TypedDict):
     messages: Annotated[list, add_messages]
 
+
+# ── Tools ──────────────────────────────────────────────────────────────────────
 
 @tool
 def web_search(query: str) -> str:
@@ -51,20 +55,50 @@ SYS = (
 )
 
 
+# ── HTTP transport that writes max_tokens directly into the raw JSON body ──────
+# The openai SDK 1.x converts max_tokens→max_completion_tokens when tools are
+# present. Some OpenRouter providers (e.g. Venice) ignore max_completion_tokens
+# and fall back to context_window-prompt_tokens (~58k), which exceeds their
+# output limit. Intercepting at the transport level guarantees the field lands
+# in the actual bytes sent over the wire, no matter what the SDK does above.
+
+class _CapMaxTokens(httpx.AsyncBaseTransport):
+    def __init__(self, cap: int) -> None:
+        self._cap = cap
+        self._inner = httpx.AsyncHTTPTransport()
+
+    async def handle_async_request(self, req: httpx.Request) -> httpx.Response:
+        if req.method == "POST" and req.content:
+            try:
+                body = json.loads(req.content)
+                body["max_tokens"] = self._cap
+                payload = json.dumps(body).encode()
+                # Rebuild request; httpx auto-sets content-length from content=
+                headers = [
+                    (k, v) for k, v in req.headers.multi_items()
+                    if k.lower() != "content-length"
+                ]
+                req = httpx.Request(req.method, req.url,
+                                    headers=headers, content=payload)
+            except Exception:
+                pass
+        return await self._inner.handle_async_request(req)
+
+
+# ── Agent builder ───────────────────────────────────────────────────────────────
+
 def build_agent(api_key: str, model: str, max_tokens: int = 1024):
-    # openai SDK 1.x converts max_tokens→max_completion_tokens when tools are bound,
-    # which Venice (OpenRouter provider) ignores and falls back to the full context
-    # window. extra_body is merged into the raw JSON body *after* SDK processing,
-    # so it forces the literal "max_tokens" key through to the provider.
     safe_max = min(max_tokens, 8192)
+
+    async_http = httpx.AsyncClient(transport=_CapMaxTokens(safe_max))
+
     llm = ChatOpenAI(
         model=model,
         openai_api_base="https://openrouter.ai/api/v1",
         openai_api_key=api_key,
         temperature=0.3,
         streaming=True,
-        max_tokens=safe_max,
-        extra_body={"max_tokens": safe_max},
+        http_async_client=async_http,
     )
     llm_with_tools = llm.bind_tools(TOOLS)
 
