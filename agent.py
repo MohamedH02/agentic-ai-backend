@@ -78,7 +78,26 @@ def calculator(expression: str) -> str:
         return f"Error: {e}"
 
 
-TOOLS = [web_search, calculator]
+@tool
+def code_executor(language: str, code: str) -> str:
+    """Execute code in a secure sandbox and return the output. Supports Python, JavaScript, etc."""
+    import httpx
+    try:
+        resp = httpx.post(
+            "https://emkc.org/api/v2/piston/execute",
+            json={"language": language, "version": "*", "files": [{"content": code}]},
+            timeout=15,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        run = data.get("run", {})
+        output = (run.get("stdout") or "") + (run.get("stderr") or "")
+        return output.strip() or "(no output)"
+    except Exception as e:
+        return f"Execution error: {e}"
+
+
+TOOLS = [web_search, calculator, code_executor]
 
 SYS = (
     "You are a helpful research assistant. Think step-by-step. "
