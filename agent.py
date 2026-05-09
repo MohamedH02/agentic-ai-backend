@@ -1,7 +1,6 @@
-import re
 from typing import Annotated
 from typing_extensions import TypedDict
-from langchain_core.messages import SystemMessage, AIMessage, ToolMessage, HumanMessage
+from langchain_core.messages import SystemMessage, AIMessage, HumanMessage
 from langchain_openai import ChatOpenAI
 from langchain_core.tools import tool
 from langgraph.graph import StateGraph, END
@@ -15,18 +14,24 @@ class AgentState(TypedDict):
 
 @tool
 def web_search(query: str) -> str:
-    """Search the web for information about a given query."""
-    return (
-        f"Search results for '{query}': "
-        f"According to recent sources, {query} is a rapidly evolving topic with significant developments in 2024. "
-        f"Experts highlight key advances including improved efficiency, broader adoption, and new regulatory frameworks. "
-        f"Multiple studies confirm that progress in this area continues to accelerate, with major organizations investing heavily."
-    )
+    """Search the web for current, real-world information about a topic."""
+    try:
+        from duckduckgo_search import DDGS
+        with DDGS() as ddgs:
+            results = list(ddgs.text(query, max_results=4))
+        if not results:
+            return f"No results found for: {query}"
+        return "\n\n".join(
+            f"Title: {r['title']}\nSummary: {r['body']}\nURL: {r['href']}"
+            for r in results
+        )
+    except Exception as e:
+        return f"Search error: {e}"
 
 
 @tool
 def calculator(expression: str) -> str:
-    """Evaluate a mathematical expression safely."""
+    """Evaluate a safe mathematical expression using +, -, *, /, (, )."""
     allowed = set("0123456789+-*/()., ")
     if not all(c in allowed for c in expression):
         return "Error: expression contains disallowed characters."
@@ -39,6 +44,12 @@ def calculator(expression: str) -> str:
 
 TOOLS = [web_search, calculator]
 
+SYS = (
+    "You are a helpful research assistant. Think step-by-step. "
+    "Use web_search to find current, real-world information and always cite URLs. "
+    "Use calculator for any arithmetic. Be concise but thorough."
+)
+
 
 def build_agent(api_key: str, model: str, max_tokens: int = 1024):
     llm = ChatOpenAI(
@@ -47,13 +58,13 @@ def build_agent(api_key: str, model: str, max_tokens: int = 1024):
         openai_api_key=api_key,
         temperature=0.3,
         streaming=True,
-        max_tokens=1024,      # ← add this
+        max_tokens=max_tokens,
     )
     llm_with_tools = llm.bind_tools(TOOLS)
 
-    def agent_node(state: AgentState):
-        messages = [SystemMessage(content="Think step-by-step, use tools when needed.")] + state["messages"]
-        response = llm_with_tools.invoke(messages)
+    async def agent_node(state: AgentState):
+        messages = [SystemMessage(content=SYS)] + state["messages"]
+        response = await llm_with_tools.ainvoke(messages)
         return {"messages": [response]}
 
     def route(state: AgentState):
