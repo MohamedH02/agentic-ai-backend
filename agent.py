@@ -19,18 +19,31 @@ class AgentState(TypedDict):
 @tool
 def web_search(query: str) -> str:
     """Search the web for current, real-world information about a topic."""
-    try:
-        from duckduckgo_search import DDGS
-        with DDGS() as ddgs:
-            results = list(ddgs.text(query, max_results=4))
-        if not results:
-            return f"No results found for: {query}"
-        return "\n\n".join(
-            f"Title: {r['title']}\nSummary: {r['body']}\nURL: {r['href']}"
-            for r in results
-        )
-    except Exception as e:
-        return f"Search error: {e}"
+    import time
+    from duckduckgo_search import DDGS
+    from duckduckgo_search.exceptions import RatelimitException
+
+    for attempt, wait in enumerate([0, 3, 8]):
+        try:
+            if wait:
+                time.sleep(wait)
+            with DDGS() as ddgs:
+                results = list(ddgs.text(query, max_results=3, safesearch="off"))
+            if not results:
+                return f"No results found for: {query}"
+            return "\n\n".join(
+                f"Title: {r['title']}\nSummary: {r['body']}\nURL: {r['href']}"
+                for r in results
+            )
+        except RatelimitException:
+            if attempt == 2:
+                return (
+                    "Web search is temporarily rate-limited. "
+                    "Based on my training knowledge: please treat this answer as approximate "
+                    "and verify with current sources."
+                )
+        except Exception as e:
+            return f"Search error: {e}"
 
 
 @tool
