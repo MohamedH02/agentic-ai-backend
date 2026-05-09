@@ -19,6 +19,26 @@ class AgentState(TypedDict):
 @tool
 def web_search(query: str) -> str:
     """Search the web for current, real-world information about a topic."""
+    import os
+
+    # ── Tavily (primary — reliable on server IPs, free 1000/month) ────────────
+    tavily_key = os.environ.get("TAVILY_API_KEY", "")
+    if tavily_key:
+        try:
+            from tavily import TavilyClient
+            client = TavilyClient(api_key=tavily_key)
+            resp = client.search(query, max_results=4)
+            results = resp.get("results", [])
+            if not results:
+                return f"No results found for: {query}"
+            return "\n\n".join(
+                f"Title: {r['title']}\nSummary: {r['content']}\nURL: {r['url']}"
+                for r in results
+            )
+        except Exception as e:
+            return f"Search error: {e}"
+
+    # ── DuckDuckGo fallback (works locally, rate-limited on shared server IPs) ─
     import time
     from duckduckgo_search import DDGS
     from duckduckgo_search.exceptions import RatelimitException
@@ -38,9 +58,8 @@ def web_search(query: str) -> str:
         except RatelimitException:
             if attempt == 2:
                 return (
-                    "Web search is temporarily rate-limited. "
-                    "Based on my training knowledge: please treat this answer as approximate "
-                    "and verify with current sources."
+                    "Search unavailable: DuckDuckGo rate-limits server IPs. "
+                    "Set TAVILY_API_KEY in your environment for reliable search."
                 )
         except Exception as e:
             return f"Search error: {e}"
