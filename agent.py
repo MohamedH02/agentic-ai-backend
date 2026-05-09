@@ -40,13 +40,14 @@ def calculator(expression: str) -> str:
 TOOLS = [web_search, calculator]
 
 
-def build_agent(api_key: str, model: str):
+def build_agent(api_key: str, model: str, max_tokens: int = 1024):
     llm = ChatOpenAI(
         model=model,
-        openai_api_key=api_key,
         openai_api_base="https://openrouter.ai/api/v1",
-        streaming=True,
+        openai_api_key=api_key,
         temperature=0.3,
+        streaming=True,
+        max_tokens=1024,      # ← add this
     )
     llm_with_tools = llm.bind_tools(TOOLS)
 

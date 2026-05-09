@@ -20,6 +20,7 @@ class RunRequest(BaseModel):
     task: str
     api_key: str
     model: str = "meta-llama/llama-3.3-70b-instruct:free"
+    max_tokens: int = 1024 
 
 
 @app.get("/")
@@ -43,7 +44,7 @@ async def event_stream(task: str, api_key: str, model: str):
         return f"data: {json.dumps(payload)}\n\n"
 
     try:
-        agent = build_agent(api_key, model)
+        agent = build_agent(api_key, model, max_tokens=1024)
         async for chunk in agent.astream(
             {"messages": [HumanMessage(content=task)]},
             stream_mode="messages",
