@@ -1,4 +1,5 @@
 import json
+import asyncio
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
@@ -39,27 +40,40 @@ async def run(req: RunRequest):
     )
 
 
-async def event_stream(task: str, api_key: str, model: str):
-    def sse(payload: dict) -> str:
-        return f"data: {json.dumps(payload)}\n\n"
-
+async def event_stream(task: str, api_key: str, model: str, max_tokens: int = 1024):
+    """Run agent to completion, then replay events cleanly — no partial tokens."""
     try:
-        agent = build_agent(api_key, model, max_tokens=1024)
-        async for chunk in agent.astream(
-            {"messages": [HumanMessage(content=task)]},
-            stream_mode="messages",
-        ):
-            msg, metadata = chunk
+        agent = build_agent(api_key, model, max_tokens)
+
+        # Run to full completion (no streaming noise)
+        result = await agent.ainvoke(
+            {"messages": [HumanMessage(content=task)]}
+        )
+
+        # Replay each message as a clean SSE event
+        for msg in result["messages"]:
+            if isinstance(msg, HumanMessage):
+                continue  # skip the input
+
             if isinstance(msg, AIMessage):
                 if msg.tool_calls:
                     for tc in msg.tool_calls:
-                        yield sse({"type": "action", "tool": tc["name"], "input": tc["args"]})
+                        event = {"type": "action", "tool": tc["name"], "input": tc["args"]}
+                        yield f"data: {json.dumps(event)}\n\n"
+                        await asyncio.sleep(0.3)   # dramatic reveal
                 elif msg.content:
-                    ev_type = "final_answer" if not msg.tool_calls else "thought"
-                    yield sse({"type": ev_type, "content": msg.content})
+                    is_final = (msg == result["messages"][-1])
+                    event = {"type": "final_answer" if is_final else "thought",
+                             "content": msg.content}
+                    yield f"data: {json.dumps(event)}\n\n"
+                    await asyncio.sleep(0.3)
+
             elif isinstance(msg, ToolMessage):
-                yield sse({"type": "observation", "content": msg.content})
+                event = {"type": "observation", "content": msg.content}
+                yield f"data: {json.dumps(event)}\n\n"
+                await asyncio.sleep(0.3)
+
+        yield 'data: {"type": "done"}\n\n'
+
     except Exception as e:
-        yield sse({"type": "error", "message": str(e)})
-    finally:
-        yield 'data: {"type":"done"}\n\n'
+        yield f'data: {json.dumps({"type": "error", "message": str(e)})}\n\n'
