@@ -52,9 +52,10 @@ SYS = (
 
 
 def build_agent(api_key: str, model: str, max_tokens: int = 1024):
-    # model_kwargs forces `max_tokens` into the raw API body — needed because
-    # langchain-openai 0.2.x aliases the field to max_completion_tokens internally,
-    # which OpenRouter doesn't recognise and falls back to the full context window.
+    # openai SDK 1.x converts max_tokens→max_completion_tokens when tools are bound,
+    # which Venice (OpenRouter provider) ignores and falls back to the full context
+    # window. extra_body is merged into the raw JSON body *after* SDK processing,
+    # so it forces the literal "max_tokens" key through to the provider.
     safe_max = min(max_tokens, 8192)
     llm = ChatOpenAI(
         model=model,
@@ -62,7 +63,8 @@ def build_agent(api_key: str, model: str, max_tokens: int = 1024):
         openai_api_key=api_key,
         temperature=0.3,
         streaming=True,
-        model_kwargs={"max_tokens": safe_max},
+        max_tokens=safe_max,
+        extra_body={"max_tokens": safe_max},
     )
     llm_with_tools = llm.bind_tools(TOOLS)
 
