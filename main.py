@@ -21,6 +21,7 @@ class RunRequest(BaseModel):
     api_key: str
     model: str = "meta-llama/llama-3.3-70b-instruct:free"
     max_tokens: int = 1024
+    history: list = []
 
 
 def sse(payload: dict) -> str:
@@ -37,20 +38,32 @@ async def run(req: RunRequest):
     if not req.api_key.startswith("sk-or"):
         raise HTTPException(status_code=400, detail="api_key must start with 'sk-or'")
     return StreamingResponse(
-        event_stream(req.task, req.api_key, req.model, req.max_tokens),
+        event_stream(req.task, req.api_key, req.model, req.max_tokens, req.history),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
 
-async def event_stream(task: str, api_key: str, model: str, max_tokens: int = 1024):
+async def event_stream(task: str, api_key: str, model: str, max_tokens: int = 1024, history: list = None):
     try:
         agent = build_agent(api_key, model, max_tokens)
         streaming_text = False
         has_tool_calls = False
 
+        # Build message list: history + current task
+        from langchain_core.messages import AIMessage as _AI
+        messages = []
+        for h in (history or []):
+            role = h.get("role", "")
+            content = h.get("content", "")
+            if role == "user":
+                messages.append(HumanMessage(content=content))
+            elif role == "assistant":
+                messages.append(_AI(content=content))
+        messages.append(HumanMessage(content=task))
+
         async for event in agent.astream_events(
-            {"messages": [HumanMessage(content=task)]},
+            {"messages": messages},
             version="v2",
         ):
             kind = event["event"]
